@@ -733,7 +733,7 @@ class TestPSATelegramNotifier(unittest.TestCase):
             
         with patch('notifier.get_local_time', return_value=datetime.datetime(2026, 7, 8, 10, 3, 0)):
             notifier.track_and_alert_aging("TX_1", "S1", "SO", "PSA", config)
-            mock_send.assert_called_once_with("TransactionID is TX_1 in server S1 for 3 min 0 sec", config)
+            mock_send.assert_called_once_with("PSA SO TransactionId is TX_1 in server S1 for 3 min 0 sec", config)
             
         mock_send.reset_mock()
         with patch('notifier.get_local_time', return_value=datetime.datetime(2026, 7, 8, 10, 4, 0)):
@@ -746,7 +746,7 @@ class TestPSATelegramNotifier(unittest.TestCase):
             
         with patch('notifier.get_local_time', return_value=datetime.datetime(2026, 7, 8, 10, 17, 0)):
             notifier.track_and_alert_aging("TX_1", "S1", "SO", "PSA", config)
-            mock_send.assert_called_once_with("TransactionID is TX_1 in server S1 for 3 min 0 sec", config)
+            mock_send.assert_called_once_with("PSA SO TransactionId is TX_1 in server S1 for 3 min 0 sec", config)
             
         notifier.parse_psa_data({"SO": []}, filter_pending=True, api_name="PSA", config=config)
         self.assertNotIn(("SO", "PSA", "TX_1"), notifier.PENDING_FIRST_SEEN)
@@ -783,100 +783,66 @@ class TestPSATelegramNotifier(unittest.TestCase):
                 handler.headers = {'Content-Length': str(len(body_bytes))}
                 handler.rfile = io.BytesIO(body_bytes)
                 handler.do_POST()
-                
-            def simulate_webhook_callback(data):
-                import io
-                payload = {
-                    "callback_query": {
-                        "id": "mock_cb_id",
-                        "message": {
-                            "message_id": 456,
-                            "chat": {"id": 123}
-                        },
-                        "data": data
-                    }
-                }
-                body_bytes = json.dumps(payload).encode('utf-8')
-                handler.headers = {'Content-Length': str(len(body_bytes))}
-                handler.rfile = io.BytesIO(body_bytes)
-                handler.do_POST()
-
-            # 1. Trigger f1 -> Bot should send inline keyboard options, no state is set yet
+                        # 1. Trigger f1 -> Bot should set state to AWAITING_VAL_F1
             notifier.USER_CONVERSATION_STATE = None
             simulate_webhook_msg("f1")
-            self.assertEqual(notifier.USER_CONVERSATION_STATE, None)
+            self.assertEqual(notifier.USER_CONVERSATION_STATE, "AWAITING_VAL_F1")
             mock_send.assert_called_once()
-            self.assertIn("Which one do you want to change?", mock_send.call_args[0][0])
-            self.assertIn("inline_keyboard", mock_send.call_args[1]["reply_markup"])
+            self.assertIn("psa_so_pending_threshold_minutes", mock_send.call_args[0][0])
             mock_send.reset_mock()
-
-            # 2. Click Default button -> data: edit_default_f1 -> state AWAITING_DEFAULT_F1
-            simulate_webhook_callback("edit_default_f1")
-            self.assertEqual(notifier.USER_CONVERSATION_STATE, "AWAITING_DEFAULT_F1")
-            mock_api.assert_any_call("editMessageText", {
-                "chat_id": "123",
-                "message_id": 456,
-                "text": "Default value for psa_so_pending_threshold_minutes:"
-            }, {"telegram_chat_id": "123"})
-            mock_api.reset_mock()
-
-            # 3. User replies with text "26" -> updates PSA_SO_PENDING_THRESHOLD_MINUTES_DEFAULT & PSA_SO_PENDING_THRESHOLD_MINUTES to 26
-            simulate_webhook_msg("26")
+ 
+            # 2. User replies with text "23" -> updates PSA_SO_PENDING_THRESHOLD_MINUTES and _DEFAULT to 23
+            simulate_webhook_msg("23")
             self.assertEqual(notifier.USER_CONVERSATION_STATE, None)
-            self.assertEqual(notifier.PSA_SO_PENDING_THRESHOLD_MINUTES, 26)
-            self.assertEqual(notifier.PSA_SO_PENDING_THRESHOLD_MINUTES_DEFAULT, 26)
-            mock_send.assert_called_with("default_psa_so_pending_threshold_minutes = 26min", {"telegram_chat_id": "123"})
+            self.assertEqual(notifier.PSA_SO_PENDING_THRESHOLD_MINUTES, 23)
+            self.assertEqual(notifier.PSA_SO_PENDING_THRESHOLD_MINUTES_DEFAULT, 23)
+            mock_send.assert_called_with("psa_so_pending_threshold_minutes set to 23 min.", {"telegram_chat_id": "123"})
             mock_send.reset_mock()
-
-            # 4. Turn off f1 directly
-            simulate_webhook_msg("f1 off")
+ 
+            # 3. Turn off f1 directly via shortcut
+            simulate_webhook_msg("o1")
             self.assertEqual(notifier.PSA_SO_PENDING_THRESHOLD_MINUTES, 0)
-            mock_send.assert_called_with("so pending threshold minutes checker is off.", {"telegram_chat_id": "123"})
+            self.assertEqual(notifier.PSA_SO_PENDING_THRESHOLD_MINUTES_DEFAULT, 0)
+            mock_send.assert_called_with("psa_so_pending_threshold_minutes checker is off.", {"telegram_chat_id": "123"})
             mock_send.reset_mock()
-
-            # 5. Trigger f6
+ 
+            # 4. Trigger f6
             simulate_webhook_msg("f6")
+            self.assertEqual(notifier.USER_CONVERSATION_STATE, "AWAITING_VAL_F6")
             mock_send.assert_called_once()
-            self.assertIn("Which one do you want to change?", mock_send.call_args[0][0])
+            self.assertIn("SAP_Contract_pending_threshold_minutes", mock_send.call_args[0][0])
             mock_send.reset_mock()
-
-            # 6. Click Current button -> data: edit_current_f6 -> state AWAITING_CURRENT_F6
-            simulate_webhook_callback("edit_current_f6")
-            self.assertEqual(notifier.USER_CONVERSATION_STATE, "AWAITING_CURRENT_F6")
-            mock_api.assert_any_call("editMessageText", {
-                "chat_id": "123",
-                "message_id": 456,
-                "text": "Current value for contractapi_co_pending_threshold_minutes:"
-            }, {"telegram_chat_id": "123"})
-            mock_api.reset_mock()
-
-            # 7. User replies with text "7 min" -> updates only CONTRACTAPI_CO_PENDING_THRESHOLD_MINUTES to 7
-            notifier.CONTRACTAPI_CO_PENDING_THRESHOLD_MINUTES_DEFAULT = 10
+ 
+            # 5. User replies with text "7 min" -> updates CONTRACTAPI_CO_PENDING_THRESHOLD_MINUTES to 7
             simulate_webhook_msg("7 min")
             self.assertEqual(notifier.USER_CONVERSATION_STATE, None)
             self.assertEqual(notifier.CONTRACTAPI_CO_PENDING_THRESHOLD_MINUTES, 7)
-            self.assertEqual(notifier.CONTRACTAPI_CO_PENDING_THRESHOLD_MINUTES_DEFAULT, 10)
-            mock_send.assert_called_with("current_contractapi_co_pending_threshold_minutes = 7min", {"telegram_chat_id": "123"})
+            self.assertEqual(notifier.CONTRACTAPI_CO_PENDING_THRESHOLD_MINUTES_DEFAULT, 7)
+            mock_send.assert_called_with("SAP_Contract_pending_threshold_minutes set to 7 min.", {"telegram_chat_id": "123"})
             mock_send.reset_mock()
-
-            # 8. Turn off f6 directly
+ 
+            # 6. Turn off f6 directly
             simulate_webhook_msg("f6 off")
             self.assertEqual(notifier.CONTRACTAPI_CO_PENDING_THRESHOLD_MINUTES, 0)
-            mock_send.assert_called_with("co pending threshold minutes checker is off.", {"telegram_chat_id": "123"})
+            self.assertEqual(notifier.CONTRACTAPI_CO_PENDING_THRESHOLD_MINUTES_DEFAULT, 0)
+            mock_send.assert_called_with("SAP_Contract_pending_threshold_minutes checker is off.", {"telegram_chat_id": "123"})
             mock_send.reset_mock()
             
-            # 9. Trigger cancel on f3
+            # 7. Trigger f3 and then interrupt with f4
             simulate_webhook_msg("f3")
+            self.assertEqual(notifier.USER_CONVERSATION_STATE, "AWAITING_VAL_F3")
             mock_send.reset_mock()
-            simulate_webhook_callback("edit_cancel_f3")
+            
+            simulate_webhook_msg("/f4")
+            self.assertEqual(notifier.USER_CONVERSATION_STATE, "AWAITING_VAL_F4")
+            mock_send.assert_called_once()
+            self.assertIn("Smartsales_so_pending_threshold_minutes", mock_send.call_args[0][0])
+            mock_send.reset_mock()
+ 
+            simulate_webhook_msg("15")
             self.assertEqual(notifier.USER_CONVERSATION_STATE, None)
-            mock_api.assert_any_call("editMessageText", {
-                "chat_id": "123",
-                "message_id": 456,
-                "text": "Action cancelled."
-            }, {"telegram_chat_id": "123"})
-            mock_api.reset_mock()
-
+            mock_send.reset_mock()
+ 
             simulate_webhook_msg("feature")
             mock_send.assert_called_once()
             feature_msg = mock_send.call_args[0][0]
@@ -949,6 +915,7 @@ class TestPSATelegramNotifier(unittest.TestCase):
             
             # 2. Modify value
             notifier.CEMENTAPI_SO_PENDING_THRESHOLD_MINUTES_DEFAULT = 42
+            notifier.CEMENTAPI_SO_PENDING_THRESHOLD_MINUTES = 42
             notifier.save_thresholds()
             
             # 3. Reset in-memory to default/other value
@@ -1068,7 +1035,7 @@ class TestPSATelegramNotifier(unittest.TestCase):
             
             # Verify both telegram text message and voice call helper were triggered!
             mock_send.assert_called_once()
-            mock_call.assert_called_once_with("Plan_Id is TX_OBD in server Server1 for 35 min 0 sec", config)
+            mock_call.assert_called_once_with("SmartSales OBD Plan_Id is TX_OBD in server Server1 for 35 min 0 sec", config)
 
     def test_freshlpg_thresholds(self):
         """Test FreshLPG thresholds, status, and config loading logic."""
@@ -1125,10 +1092,9 @@ class TestPSATelegramNotifier(unittest.TestCase):
             mock_send.return_value = (True, None)
             notifier.process_long_poll_update(update, config)
             self.assertEqual(notifier.PSA_SO_PENDING_THRESHOLD_MINUTES, 0)
-            mock_send.assert_called_with("so pending threshold minutes checker is off.", config)
+            mock_send.assert_called_with("psa_so_pending_threshold_minutes checker is off.", config)
             
-        # Test state switcher to render
-        notifier.IS_STANDBY = False
+        # Test state switcher is disabled
         update = {
             "message": {
                 "chat": {"id": "mock_chat"},
@@ -1136,20 +1102,31 @@ class TestPSATelegramNotifier(unittest.TestCase):
             }
         }
         with patch("notifier.send_telegram_notification") as mock_send, \
-             patch("urllib.request.urlopen") as mock_urlopen, \
              patch("notifier.load_config") as mock_load_config:
             mock_load_config.return_value = config
             mock_send.return_value = (True, None)
-            mock_res = MagicMock()
-            mock_res.__enter__.return_value = mock_res
-            mock_res.read.return_value = b'{"ok": true}'
-            mock_res.status = 200
-            mock_urlopen.return_value = mock_res
-            
-            with patch.dict("os.environ", {"RENDER_EXTERNAL_URL": "https://mock-render.com"}):
-                notifier.process_long_poll_update(update, config)
-                self.assertTrue(notifier.IS_STANDBY)
-                mock_send.assert_any_call("🔄 Successfully switched preferred environment to Render. Render is now active.", config)
+            notifier.process_long_poll_update(update, config)
+            mock_send.assert_called_with("State switching is disabled. Render runs webhook only and Local runs long polling only.", config)
+
+    def test_callmebot_target_validation(self):
+        """Test is_valid_callmebot_target and validate_callmebot_user_list."""
+        # Test valid targets
+        self.assertTrue(notifier.is_valid_callmebot_target("+8801838262248"))
+        self.assertTrue(notifier.is_valid_callmebot_target("@UshDhar"))
+        self.assertTrue(notifier.is_valid_callmebot_target("UshDhar"))
+        self.assertTrue(notifier.is_valid_callmebot_target("ush_dhar"))
+        
+        # Test invalid targets
+        self.assertFalse(notifier.is_valid_callmebot_target("1262260329"))  # pure digits must start with +
+        self.assertFalse(notifier.is_valid_callmebot_target("-12"))
+        self.assertFalse(notifier.is_valid_callmebot_target("0"))
+        self.assertFalse(notifier.is_valid_callmebot_target(""))
+        
+        # Test user list validator
+        self.assertTrue(notifier.validate_callmebot_user_list("UshDhar, +8801838262248"))
+        self.assertTrue(notifier.validate_callmebot_user_list("@UshDhar, +8801838262248"))
+        self.assertFalse(notifier.validate_callmebot_user_list("UshDhar, 1262260329"))
+        self.assertFalse(notifier.validate_callmebot_user_list("-12, +8801838262248"))
 
 if __name__ == '__main__':
     unittest.main()
